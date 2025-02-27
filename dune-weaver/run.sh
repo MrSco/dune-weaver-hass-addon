@@ -42,7 +42,8 @@ fi
 cd /app
 
 # Set PYTHONPATH to include app directory
-export PYTHONPATH=/app:$PYTHONPATH
+# Use parameter expansion with default value to handle unbound variable
+export PYTHONPATH=/app:${PYTHONPATH:-}
 
 # Start the application using the startup script
 bashio::log.info "Starting Dune Weaver application..."
