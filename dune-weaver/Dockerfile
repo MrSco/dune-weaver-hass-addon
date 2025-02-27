@@ -26,6 +26,27 @@ RUN if [ -f "/app/install_deps.sh" ]; then chmod a+x /app/install_deps.sh; fi
 RUN if [ -f "/app/check_imports.py" ]; then chmod a+x /app/check_imports.py; fi
 RUN if [ -f "/app/start.py" ]; then chmod a+x /app/start.py; fi
 RUN if [ -f "/app/test_app.py" ]; then chmod a+x /app/test_app.py; fi
+RUN if [ -f "/app/startup.py" ]; then chmod a+x /app/startup.py; fi
+
+# Install Python dependencies with error handling
+# First upgrade pip
+RUN pip3 install --no-cache-dir --upgrade pip
+
+# Install essential dependencies one by one with error handling
+RUN pip3 install --no-cache-dir fastapi || echo "Warning: fastapi installation failed, will try at runtime"
+RUN pip3 install --no-cache-dir uvicorn || echo "Warning: uvicorn installation failed, will try at runtime"
+RUN pip3 install --no-cache-dir pydantic || echo "Warning: pydantic installation failed, will try at runtime"
+RUN pip3 install --no-cache-dir jinja2 || echo "Warning: jinja2 installation failed, will try at runtime"
+RUN pip3 install --no-cache-dir websockets || echo "Warning: websockets installation failed, will try at runtime"
+RUN pip3 install --no-cache-dir python-multipart || echo "Warning: python-multipart installation failed, will try at runtime"
+RUN pip3 install --no-cache-dir aiofiles || echo "Warning: aiofiles installation failed, will try at runtime"
+
+# Install non-essential dependencies with error handling
+RUN pip3 install --no-cache-dir pyserial || echo "Warning: pyserial installation failed, will try at runtime"
+RUN pip3 install --no-cache-dir paho-mqtt || echo "Warning: paho-mqtt installation failed, will try at runtime"
+RUN pip3 install --no-cache-dir websocket-client || echo "Warning: websocket-client installation failed, will try at runtime"
+RUN pip3 install --no-cache-dir tqdm || echo "Warning: tqdm installation failed, will try at runtime"
+RUN pip3 install --no-cache-dir python-dotenv || echo "Warning: python-dotenv installation failed, will try at runtime"
 
 # Set shell
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]

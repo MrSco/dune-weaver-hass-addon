@@ -41,34 +41,12 @@ fi
 # Change to app directory
 cd /app
 
-# Make test_app.py executable
-chmod +x test_app.py
+# Make startup.py executable
+chmod +x startup.py
 
-# Install essential dependencies only
-bashio::log.info "Installing essential Python dependencies..."
-pip3 install --no-cache-dir fastapi uvicorn pydantic jinja2 websockets python-multipart aiofiles || true
+# Set PYTHONPATH to include app directory
+export PYTHONPATH=/app:$PYTHONPATH
 
-# Check if FastAPI is installed
-if ! python3 -c "import fastapi" 2>/dev/null; then
-  bashio::log.error "FastAPI installation failed. Trying alternative approach..."
-  # Try installing with --user flag
-  pip3 install --no-cache-dir --user fastapi uvicorn pydantic jinja2 websockets python-multipart aiofiles || true
-  
-  # Add user site-packages to PYTHONPATH
-  export PYTHONPATH="$HOME/.local/lib/python$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages:/app:$PYTHONPATH"
-fi
-
-# Debug: List installed Python packages
-bashio::log.info "Python packages after installation:"
-pip3 list
-
-# Run the test app to verify dependencies
-bashio::log.info "Testing dependencies..."
-if python3 test_app.py; then
-  bashio::log.info "Dependency test passed! Starting the main application..."
-  # Start the application
-  PYTHONPATH=/app:$PYTHONPATH python3 app.py
-else
-  bashio::log.error "Dependency test failed! Cannot start the application."
-  exit 1
-fi 
+# Start the application using the startup script
+bashio::log.info "Starting Dune Weaver application..."
+python3 startup.py 
