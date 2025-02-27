@@ -1,0 +1,35 @@
+name: "Dune Weaver"
+description: "Control your Dune Weaver sand table device"
+version: "1.0.0"
+slug: "dune_weaver"
+init: false
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+startup: application
+boot: auto
+ports:
+  8080/tcp: 8080
+ports_description:
+  8080/tcp: "Web interface"
+uart: true
+usb: true
+devices:
+  - /dev/ttyACM0
+  - /dev/ttyUSB0
+privileged:
+  - SYS_RAWIO
+hassio_api: true
+homeassistant_api: true
+options:
+  wled_ip: ""
+schema:
+  wled_ip: "str?"
+webui: "http://[HOST]:[PORT:8080]/"
+ingress: true
+ingress_port: 8080
+panel_icon: mdi:robot-vacuum
+panel_title: "Dune Weaver" 
