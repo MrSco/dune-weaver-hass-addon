@@ -14,8 +14,21 @@ mkdir -p /app/static/webfonts
 mkdir -p /app/modules
 mkdir -p /config/dune-weaver
 
+# Copy static files from rootfs to app directory
+if [ -d "/rootfs/app/static" ]; then
+  bashio::log.info "Copying static files from rootfs to app directory"
+  cp -r /rootfs/app/static/* /app/static/
+fi
+
+# Copy template files from rootfs to app directory
+if [ -d "/rootfs/app/templates" ]; then
+  bashio::log.info "Copying template files from rootfs to app directory"
+  cp -r /rootfs/app/templates/* /app/templates/
+fi
+
 # Ensure static files have correct permissions
 chmod -R 755 /app/static
+chmod -R 755 /app/templates
 
 # Copy data from persistent storage if it exists
 if [ -d "/config/dune-weaver/patterns" ]; then

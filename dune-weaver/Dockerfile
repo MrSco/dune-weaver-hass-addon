@@ -16,9 +16,17 @@ RUN apk add --no-cache \
     unzip
 
 # Copy the application files
-COPY rootfs /
+COPY rootfs /rootfs
 COPY run.sh /
 RUN chmod a+x /run.sh
+
+# Create necessary directories and copy files
+RUN mkdir -p /app/static /app/templates /app/modules
+RUN if [ -d "/rootfs/app/static" ]; then cp -r /rootfs/app/static/* /app/static/; fi
+RUN if [ -d "/rootfs/app/templates" ]; then cp -r /rootfs/app/templates/* /app/templates/; fi
+RUN if [ -d "/rootfs/app/modules" ]; then cp -r /rootfs/app/modules/* /app/modules/; fi
+RUN if [ -f "/rootfs/app/app.py" ]; then cp /rootfs/app/app.py /app/; fi
+RUN if [ -f "/rootfs/app/startup.py" ]; then cp /rootfs/app/startup.py /app/; fi
 
 # Make scripts executable if they exist
 RUN if [ -f "/app/test_deps.py" ]; then chmod a+x /app/test_deps.py; fi
