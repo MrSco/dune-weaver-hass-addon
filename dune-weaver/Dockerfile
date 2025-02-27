@@ -21,12 +21,11 @@ COPY run.sh /
 RUN chmod a+x /run.sh
 RUN chmod a+x /app/test_deps.py
 RUN chmod a+x /app/install_deps.sh
+RUN chmod a+x /app/check_imports.py
+RUN chmod a+x /app/start.py
 
-# Install Python dependencies
-COPY rootfs/app/requirements.txt /tmp/requirements.txt
+# Install Python dependencies - use system pip to ensure they're in the right path
 RUN pip3 install --no-cache-dir --upgrade pip && \
-    pip3 install --no-cache-dir -r /tmp/requirements.txt && \
-    # Install critical packages explicitly to ensure they're available
     pip3 install --no-cache-dir \
     fastapi==0.100.0 \
     uvicorn==0.23.0 \
@@ -41,6 +40,9 @@ RUN pip3 install --no-cache-dir --upgrade pip && \
     tqdm==4.65.0 \
     python-dotenv==1.0.0 \
     esptool==4.1
+
+# Verify installation
+RUN python3 -c "import fastapi" || { echo "FastAPI not installed correctly"; exit 1; }
 
 # Set shell
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
