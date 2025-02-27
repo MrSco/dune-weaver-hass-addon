@@ -19,30 +19,13 @@ RUN apk add --no-cache \
 COPY rootfs /
 COPY run.sh /
 RUN chmod a+x /run.sh
-RUN chmod a+x /app/test_deps.py
-RUN chmod a+x /app/install_deps.sh
-RUN chmod a+x /app/check_imports.py
-RUN chmod a+x /app/start.py
 
-# Install Python dependencies - use system pip to ensure they're in the right path
-RUN pip3 install --no-cache-dir --upgrade pip && \
-    pip3 install --no-cache-dir \
-    fastapi==0.100.0 \
-    uvicorn==0.23.0 \
-    pydantic==2.0.0 \
-    jinja2==3.1.2 \
-    websockets==11.0.3 \
-    python-multipart==0.0.6 \
-    aiofiles==23.1.0 \
-    pyserial==3.5 \
-    paho-mqtt==1.6.1 \
-    websocket-client==1.6.1 \
-    tqdm==4.65.0 \
-    python-dotenv==1.0.0 \
-    esptool==4.1
-
-# Verify installation
-RUN python3 -c "import fastapi" || { echo "FastAPI not installed correctly"; exit 1; }
+# Make scripts executable if they exist
+RUN if [ -f "/app/test_deps.py" ]; then chmod a+x /app/test_deps.py; fi
+RUN if [ -f "/app/install_deps.sh" ]; then chmod a+x /app/install_deps.sh; fi
+RUN if [ -f "/app/check_imports.py" ]; then chmod a+x /app/check_imports.py; fi
+RUN if [ -f "/app/start.py" ]; then chmod a+x /app/start.py; fi
+RUN if [ -f "/app/test_app.py" ]; then chmod a+x /app/test_app.py; fi
 
 # Set shell
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]

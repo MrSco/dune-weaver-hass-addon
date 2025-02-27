@@ -41,32 +41,34 @@ fi
 # Change to app directory
 cd /app
 
-# Make sure start.py is executable
-chmod +x start.py
+# Make test_app.py executable
+chmod +x test_app.py
+
+# Install essential dependencies only
+bashio::log.info "Installing essential Python dependencies..."
+pip3 install --no-cache-dir fastapi uvicorn pydantic jinja2 websockets python-multipart aiofiles || true
+
+# Check if FastAPI is installed
+if ! python3 -c "import fastapi" 2>/dev/null; then
+  bashio::log.error "FastAPI installation failed. Trying alternative approach..."
+  # Try installing with --user flag
+  pip3 install --no-cache-dir --user fastapi uvicorn pydantic jinja2 websockets python-multipart aiofiles || true
+  
+  # Add user site-packages to PYTHONPATH
+  export PYTHONPATH="$HOME/.local/lib/python$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages:/app:$PYTHONPATH"
+fi
 
 # Debug: List installed Python packages
-bashio::log.info "Currently installed Python packages:"
-pip3 list
-
-# Install dependencies directly (emergency approach)
-bashio::log.info "Installing Python dependencies directly..."
-pip3 install --no-cache-dir --upgrade pip
-pip3 install --no-cache-dir fastapi==0.100.0 uvicorn==0.23.0 pydantic==2.0.0 jinja2==3.1.2 websockets==11.0.3 python-multipart==0.0.6 aiofiles==23.1.0 pyserial==3.5 paho-mqtt==1.6.1 websocket-client==1.6.1 tqdm==4.65.0 python-dotenv==1.0.0 esptool==4.1
-
-# Try user-level installation as well
-pip3 install --no-cache-dir --user fastapi==0.100.0 uvicorn==0.23.0 pydantic==2.0.0 jinja2==3.1.2 websockets==11.0.3 python-multipart==0.0.6 aiofiles==23.1.0
-
-# Set PYTHONPATH to include user site-packages
-export PYTHONPATH="$HOME/.local/lib/python$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages:/app:$PYTHONPATH"
-
-# Debug: List installed Python packages again
 bashio::log.info "Python packages after installation:"
 pip3 list
 
-# Debug: Show Python path
-bashio::log.info "Python path:"
-python3 -c "import sys; print('\n'.join(sys.path))"
-
-# Start the application using the wrapper script
-bashio::log.info "Starting Dune Weaver application using wrapper script..."
-PYTHONPATH=/app:$PYTHONPATH python3 start.py 
+# Run the test app to verify dependencies
+bashio::log.info "Testing dependencies..."
+if python3 test_app.py; then
+  bashio::log.info "Dependency test passed! Starting the main application..."
+  # Start the application
+  PYTHONPATH=/app:$PYTHONPATH python3 app.py
+else
+  bashio::log.error "Dependency test failed! Cannot start the application."
+  exit 1
+fi 
