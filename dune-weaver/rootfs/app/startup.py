@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
 Startup script for Dune Weaver.
-This script checks if all required dependencies are installed,
-and installs any missing ones before starting the application.
+This script checks if all required dependencies are installed before starting the application.
+Dependencies should have been installed during the Docker build process.
 """
 import sys
 import importlib
-import subprocess
 import os
 
 def check_dependencies():
@@ -34,18 +33,8 @@ def check_dependencies():
         print("\nMissing packages:")
         for package in missing_packages:
             print(f"  - {package}")
-        
-        # Try to install missing packages
-        print("\nAttempting to install missing packages...")
-        try:
-            subprocess.check_call([
-                sys.executable, "-m", "pip", "install", "--no-cache-dir"
-            ] + missing_packages)
-            print("Installation successful!")
-            return True
-        except subprocess.CalledProcessError:
-            print("Failed to install missing packages.")
-            return False
+        print("\nERROR: Required dependencies are missing. Please rebuild the Docker image.")
+        return False
     
     return True
 
@@ -53,7 +42,7 @@ def main():
     """Main function."""
     print("Checking dependencies...")
     if not check_dependencies():
-        print("Failed to install all required dependencies.")
+        print("Cannot start application due to missing dependencies.")
         sys.exit(1)
     
     print("All dependencies are installed! Starting the application...")

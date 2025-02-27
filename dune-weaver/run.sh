@@ -41,12 +41,10 @@ fi
 # Change to app directory
 cd /app
 
-# Make startup.py executable
-chmod +x startup.py
-
 # Set PYTHONPATH to include app directory
 export PYTHONPATH=/app:$PYTHONPATH
 
 # Start the application using the startup script
 bashio::log.info "Starting Dune Weaver application..."
+bashio::log.info "All dependencies should have been installed during the Docker build process."
 python3 startup.py 
