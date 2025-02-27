@@ -7,8 +7,15 @@ set -x
 mkdir -p /app/patterns
 mkdir -p /app/templates
 mkdir -p /app/static
+mkdir -p /app/static/css
+mkdir -p /app/static/js
+mkdir -p /app/static/icons
+mkdir -p /app/static/webfonts
 mkdir -p /app/modules
 mkdir -p /config/dune-weaver
+
+# Ensure static files have correct permissions
+chmod -R 755 /app/static
 
 # Copy data from persistent storage if it exists
 if [ -d "/config/dune-weaver/patterns" ]; then
