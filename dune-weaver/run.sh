@@ -35,6 +35,15 @@ if [ ! -z "$WLED_IP" ]; then
   python3 -c "import json; s=json.load(open('/app/state.json')); s['wled_ip']='$WLED_IP'; json.dump(s, open('/app/state.json', 'w'))"
 fi
 
-# Start the application
+# Install dependencies
 cd /app
+bashio::log.info "Installing Python dependencies..."
+./install_deps.sh || {
+  bashio::log.error "Failed to install dependencies. Trying emergency installation..."
+  pip3 install --no-cache-dir fastapi==0.100.0 uvicorn==0.23.0 pydantic==2.0.0 jinja2==3.1.2 \
+  websockets==11.0.3 python-multipart==0.0.6 aiofiles==23.1.0 pyserial==3.5 paho-mqtt==1.6.1 websocket-client==1.6.1
+}
+
+# Start the application
+bashio::log.info "Starting Dune Weaver application..."
 python3 app.py 

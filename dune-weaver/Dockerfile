@@ -19,6 +19,28 @@ RUN apk add --no-cache \
 COPY rootfs /
 COPY run.sh /
 RUN chmod a+x /run.sh
+RUN chmod a+x /app/test_deps.py
+RUN chmod a+x /app/install_deps.sh
+
+# Install Python dependencies
+COPY rootfs/app/requirements.txt /tmp/requirements.txt
+RUN pip3 install --no-cache-dir --upgrade pip && \
+    pip3 install --no-cache-dir -r /tmp/requirements.txt && \
+    # Install critical packages explicitly to ensure they're available
+    pip3 install --no-cache-dir \
+    fastapi==0.100.0 \
+    uvicorn==0.23.0 \
+    pydantic==2.0.0 \
+    jinja2==3.1.2 \
+    websockets==11.0.3 \
+    python-multipart==0.0.6 \
+    aiofiles==23.1.0 \
+    pyserial==3.5 \
+    paho-mqtt==1.6.1 \
+    websocket-client==1.6.1 \
+    tqdm==4.65.0 \
+    python-dotenv==1.0.0 \
+    esptool==4.1
 
 # Set shell
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
