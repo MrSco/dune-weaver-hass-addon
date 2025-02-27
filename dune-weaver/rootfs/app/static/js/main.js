@@ -19,17 +19,31 @@ const getBaseUrl = () => {
     }
 };
 
-// Get the base URL once at startup
-const baseUrl = getBaseUrl();
-console.log('Using base URL for API requests:', baseUrl);
-
 // Helper function to build API URLs
+const baseUrl = getBaseUrl();
+console.log('Base URL detected:', baseUrl);
+
 const apiUrl = (endpoint) => {
-    // Remove leading slash if present
-    if (endpoint.startsWith('/')) {
-        endpoint = endpoint.substring(1);
+    // Remove leading slash if present to prevent double slashes
+    const cleanEndpoint = endpoint.startsWith('/') ? endpoint.substring(1) : endpoint;
+    
+    let result;
+    // If we're in Home Assistant, use the ingress path
+    if (baseUrl) {
+        // If baseUrl ends with a slash, don't add another one
+        if (baseUrl.endsWith('/')) {
+            result = baseUrl + cleanEndpoint;
+        } else {
+            // Otherwise, add a slash between baseUrl and endpoint
+            result = baseUrl + '/' + cleanEndpoint;
+        }
+    } else {
+        // Direct access - use the original endpoint with leading slash
+        result = '/' + cleanEndpoint;
     }
-    return `${baseUrl}/${endpoint}`;
+    
+    console.log(`API URL for endpoint "${endpoint}": ${result}`);
+    return result;
 };
 
 // Define constants for log message types
@@ -1621,23 +1635,29 @@ function saveSettingsToCookies() {
 // Load settings from cookies
 function loadSettingsFromCookies() {
     const pauseTime = getCookie('pause_time');
-    if (pauseTime !== '') {
-        document.getElementById('pause_time').value = pauseTime;
+    const pauseTimeElement = document.getElementById('pause_time');
+    if (pauseTimeElement && pauseTime !== null && pauseTime !== '') {
+        pauseTimeElement.value = pauseTime;
     }
 
     const clearPattern = getCookie('clear_pattern');
-    if (clearPattern !== '') {
-        document.getElementById('clear_pattern').value = clearPattern;
+    const clearPatternElement = document.getElementById('clear_pattern');
+    if (clearPatternElement && clearPattern !== null && clearPattern !== '') {
+        clearPatternElement.value = clearPattern;
     }
 
     const runMode = getCookie('run_mode');
-    if (runMode !== '') {
-        document.querySelector(`input[name="run_mode"][value="${runMode}"]`).checked = true;
+    if (runMode !== null && runMode !== '') {
+        const runModeElement = document.querySelector(`input[name="run_mode"][value="${runMode}"]`);
+        if (runModeElement) {
+            runModeElement.checked = true;
+        }
     }
 
     const shuffle = getCookie('shuffle');
-    if (shuffle !== '') {
-        document.getElementById('shuffle_playlist').checked = shuffle === 'true';
+    const shuffleElement = document.getElementById('shuffle_playlist');
+    if (shuffleElement && shuffle !== null && shuffle !== '') {
+        shuffleElement.checked = shuffle === 'true';
     }
 
     logMessage('Settings loaded from cookies.');
@@ -1657,35 +1677,254 @@ function attachSettingsSaveListeners() {
 
 // Tab switching logic with cookie storage
 function switchTab(tabName) {
-    // Store the active tab in a cookie
-    setCookie('activeTab', tabName, 365); // Store for 7 days
-
-    // Deactivate all tab content
-    document.querySelectorAll('.tab-content').forEach(tab => {
-        tab.classList.remove('active');
-    });
-
-    // Activate the selected tab content
-    const activeTab = document.getElementById(`${tabName}-tab`);
-    if (activeTab) {
-        activeTab.classList.add('active');
-    } else {
-        console.error(`Error: Tab "${tabName}" not found.`);
-    }
-
-    // Deactivate all nav buttons
-    document.querySelectorAll('.bottom-nav .tab-button').forEach(button => {
-        button.classList.remove('active');
-    });
-
-    // Activate the selected nav button
-    const activeNavButton = document.getElementById(`nav-${tabName}`);
-    if (activeNavButton) {
-        activeNavButton.classList.add('active');
-    } else {
-        console.error(`Error: Nav button for "${tabName}" not found.`);
+    // Hide all tab content
+    const tabContents = document.querySelectorAll('.tab-content');
+    tabContents.forEach(tab => tab.style.display = 'none');
+    
+    // Remove active class from all tab buttons
+    const tabButtons = document.querySelectorAll('.tab-button');
+    tabButtons.forEach(button => button.classList.remove('active'));
+    
+    // Show the selected tab content
+    const selectedTab = document.getElementById(`${tabName}-tab`);
+    if (selectedTab) {
+        selectedTab.style.display = 'flex';
+        
+        // Add active class to the selected tab button
+        const activeNavButton = document.getElementById(`nav-${tabName}`);
+        if (activeNavButton) {
+            activeNavButton.classList.add('active');
+        } else {
+            console.error(`Error: Nav button for "${tabName}" not found.`);
+        }
     }
 }
+
+function connectStatusWebSocket() {
+    if (statusSocket && statusSocket.readyState === WebSocket.OPEN) {
+        console.log('WebSocket already connected');
+        return;
+    }
+    
+    if (reconnectAttempts >= maxReconnectAttempts) {
+        console.log('Max reconnect attempts reached, giving up');
+        return;
+    }
+    
+    reconnectAttempts++;
+    
+    // Create WebSocket connection
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host;
+    const wsEndpoint = 'ws/status';
+    
+    console.log('WebSocket protocol:', protocol);
+    console.log('WebSocket host:', host);
+    console.log('WebSocket endpoint:', wsEndpoint);
+    
+    // Build the WebSocket URL based on the base URL
+    let wsUrl;
+    
+    // If we're in Home Assistant, use the ingress path
+    if (baseUrl) {
+        // Remove leading slash if present
+        const cleanBaseUrl = baseUrl.startsWith('/') ? baseUrl.substring(1) : baseUrl;
+        // Remove trailing slash if present
+        const cleanPath = cleanBaseUrl.endsWith('/') ? cleanBaseUrl.slice(0, -1) : cleanBaseUrl;
+        
+        console.log('WebSocket clean path:', cleanPath);
+        wsUrl = `${protocol}//${host}/${cleanPath}/${wsEndpoint}`;
+    } else {
+        // Direct access - use the original endpoint
+        wsUrl = `${protocol}//${host}/${wsEndpoint}`;
+    }
+    
+    console.log('Connecting to WebSocket at:', wsUrl);
+    statusSocket = new WebSocket(wsUrl);
+    
+    statusSocket.onopen = function(e) {
+        console.log('Status WebSocket connected');
+        wsConnected = true;
+        reconnectAttempts = 0; // Reset reconnect attempts on successful connection
+    };
+
+    statusSocket.onmessage = (event) => {
+        try {
+            const message = JSON.parse(event.data);
+            if (message.type === 'status_update' && message.data) {
+                updateCurrentlyPlayingUI(message.data);
+                
+                // Disconnect WebSocket if no pattern is running
+                if (!message.data.is_running) {
+                    console.log('No pattern running, disconnecting WebSocket');
+                    disconnectStatusWebSocket();
+                }
+            }
+        } catch (error) {
+            console.error('Error processing status update:', error);
+            console.error('Raw data that caused error:', event.data);
+        }
+    };
+
+    statusSocket.onclose = () => {
+        console.log('Status WebSocket disconnected');
+        wsConnected = false;
+        clearInterval(statusUpdateInterval);
+        
+        // Only attempt to reconnect if we're supposed to be connected
+        if (reconnectAttempts < maxReconnectAttempts && document.body.classList.contains('playing')) {
+            reconnectAttempts++;
+            const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+            console.log(`Reconnecting in ${delay/1000}s (Attempt ${reconnectAttempts}/${maxReconnectAttempts})`);
+            setTimeout(connectStatusWebSocket, delay);
+        }
+    };
+
+    statusSocket.onerror = (error) => {
+        console.error('WebSocket error:', error);
+    };
+}
+
+function disconnectStatusWebSocket() {
+    if (statusSocket && wsConnected) {
+        wsConnected = false;
+        statusSocket.close();
+        statusSocket = null;
+        reconnectAttempts = 0;
+    }
+}
+
+// Track the last played file to detect when a new pattern starts
+let lastPlayedFile = null;
+
+function updateCurrentlyPlayingUI(status) {
+    console.log('Updating UI with status:', status);
+
+    // Get all required DOM elements once
+    const container = document.getElementById('currently-playing-container');
+    const fileNameElement = document.getElementById('currently-playing-file');
+    const progressBar = document.getElementById('play_progress');
+    const progressText = document.getElementById('play_progress_text');
+    const pausePlayButton = document.getElementById('pausePlayCurrent');
+    const speedDisplay = document.getElementById('current_speed_display');
+
+    // Check if all required elements exist
+    if (!container || !fileNameElement || !progressBar || !progressText) {
+        console.log('Required DOM elements not found:', {
+            container: !!container,
+            fileNameElement: !!fileNameElement,
+            progressBar: !!progressBar,
+            progressText: !!progressText
+        });
+        setTimeout(() => updateCurrentlyPlayingUI(status), 100);
+        return;
+    }
+
+    // Update container visibility based on status
+    if (status.current_file && status.is_running) {
+        document.body.classList.add('playing');
+        container.style.display = 'flex';
+        
+        // Hide the preview container when a pattern is playing
+        const previewContainer = document.getElementById('pattern-preview-container');
+        if (previewContainer) {
+            previewContainer.classList.add('hidden');
+            previewContainer.classList.remove('visible');
+            // Clear any selected file highlights
+            document.querySelectorAll('#theta_rho_files .file-item').forEach(item => {
+                item.classList.remove('selected');
+            });
+        }
+    } else {
+        document.body.classList.remove('playing');
+        container.style.display = 'none';
+    }
+
+    // Update file name display
+    if (status.current_file) {
+        const fileName = status.current_file.replace('./patterns/', '');
+        fileNameElement.textContent = fileName;
+    } else {
+        fileNameElement.textContent = 'No pattern playing';
+    }
+
+    // Update next file display
+    const nextFileElement = document.getElementById('next-file');
+    if (nextFileElement) {
+        if (status.playlist && status.playlist.next_file) {
+            const nextFileName = status.playlist.next_file.replace('./patterns/', '');
+            nextFileElement.textContent = `(Next: ${nextFileName})`;
+            nextFileElement.style.display = 'block';
+        } else {
+            nextFileElement.style.display = 'none';
+        }
+    }
+
+    // Update speed display if it exists
+    if (speedDisplay && status.speed) {
+        speedDisplay.textContent = `Current Speed: ${status.speed}`;
+    }
+
+    // Update pattern preview if it's a new pattern
+    if (status.current_file && lastPlayedFile !== status.current_file) {
+        lastPlayedFile = status.current_file;
+        const cleanFileName = status.current_file.replace('./patterns/', '');
+        previewPattern(cleanFileName, 'currently-playing-container');
+    }
+
+    // Update progress information
+    if (status.progress) {
+        const { percentage, remaining_time, elapsed_time } = status.progress;
+        const formattedPercentage = percentage.toFixed(1);
+        const remainingText = remaining_time === null ? 'calculating...' : formatSecondsToHMS(remaining_time);
+        const elapsedText = formatSecondsToHMS(elapsed_time);
+
+        progressBar.value = formattedPercentage;
+        progressText.textContent = `${formattedPercentage}% (Elapsed: ${elapsedText} | Remaining: ${remainingText})`;
+    } else {
+        progressBar.value = 0;
+        progressText.textContent = '0%';
+    }
+
+    // Update pause/play button if it exists
+    if (pausePlayButton) {
+        pausePlayButton.innerHTML = status.is_paused ? 
+            '<i class="fa-solid fa-play"></i>' : 
+            '<i class="fa-solid fa-pause"></i>';
+    }
+}
+
+// Initialize WebSocket variables
+let statusSocket = null;
+let reconnectAttempts = 0;
+const maxReconnectAttempts = 5;
+let statusUpdateInterval = null;
+let wsConnected = false;
+
+// Initialize the application when the DOM is loaded
+document.addEventListener('DOMContentLoaded', () => {
+    const activeTab = getCookie('activeTab') || 'patterns'; // Default to 'patterns' tab
+    switchTab(activeTab); // Load the active tab
+    checkSerialStatus(); // Check connection status
+    loadThetaRhoFiles(); // Load files on page load
+    loadAllPlaylists(); // Load all playlists on page load
+    attachSettingsSaveListeners(); // Attach event listeners to save changes
+    attachFullScreenListeners();
+    loadWledIp();
+    updateWledUI();
+
+    // Initialize WebSocket connection for status updates
+    connectStatusWebSocket();
+
+    // Handle visibility change
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && statusSocket && statusSocket.readyState !== WebSocket.OPEN) {
+            connectStatusWebSocket();
+        }
+    });
+
+    checkForUpdates();
+});
 
 // Update the small UI segment to show the IP or hide it if none
 function updateWledUI() {
@@ -1702,7 +1941,6 @@ function updateWledUI() {
     // Show the container and load WLED UI
     wledContainer.classList.remove('hidden');
     wledFrame.src = `http://${wledIp}`;
-
 }
 
 // Save or clear the WLED IP, updating both the browser and backend
@@ -1803,252 +2041,4 @@ async function loadWledIp() {
 function validateIp(ip) {
     const ipRegex = /^(25[0-5]|2[0-4]\d|1\d\d|\d?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|\d?\d)){3}$/;
     return ipRegex.test(ip);
-  }
-
-// Theme toggle functionality
-const themeToggle = document.getElementById('theme-toggle');
-const themeIcon = themeToggle.querySelector('i');
-
-themeToggle.addEventListener('click', () => {
-    const root = document.documentElement;
-    const currentTheme = root.getAttribute('data-theme');
-    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-    
-    root.setAttribute('data-theme', newTheme);
-    localStorage.setItem('theme', newTheme);
-    
-    // Toggle the icon
-    themeIcon.className = newTheme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
-});
-
-// Set initial theme and icon based on saved theme
-const savedTheme = localStorage.getItem('theme') || 'light';
-document.documentElement.setAttribute('data-theme', savedTheme);
-themeIcon.className = savedTheme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
-
-
-// Add WebSocket connection for status updates
-let statusSocket = null;
-let reconnectAttempts = 0;
-const maxReconnectAttempts = 5;
-let statusUpdateInterval = null;
-let wsConnected = false;
-
-function connectStatusWebSocket() {
-    if (statusSocket && statusSocket.readyState === WebSocket.OPEN) {
-        console.log('WebSocket already connected');
-        return;
-    }
-    
-    if (reconnectAttempts >= maxReconnectAttempts) {
-        console.log('Max reconnect attempts reached, giving up');
-        return;
-    }
-    
-    reconnectAttempts++;
-    
-    // Create WebSocket connection
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsEndpoint = 'ws/status';
-    
-    // Build the WebSocket URL based on the base URL
-    let wsUrl;
-    if (baseUrl) {
-        // We're in Home Assistant, use the base URL
-        // Remove leading slash if present
-        const baseUrlWithoutLeadingSlash = baseUrl.replace(/^\//, '');
-        wsUrl = `${protocol}//${window.location.host}/${baseUrlWithoutLeadingSlash}/${wsEndpoint}`;
-    } else {
-        // We're accessing the app directly
-        wsUrl = `${protocol}//${window.location.host}/${wsEndpoint}`;
-    }
-    
-    console.log('Connecting to WebSocket at:', wsUrl);
-    statusSocket = new WebSocket(wsUrl);
-    
-    statusSocket.onopen = function(e) {
-        console.log('Status WebSocket connected');
-        wsConnected = true;
-        reconnectAttempts = 0; // Reset reconnect attempts on successful connection
-    };
-
-    statusSocket.onmessage = (event) => {
-        try {
-            const message = JSON.parse(event.data);
-            if (message.type === 'status_update' && message.data) {
-                updateCurrentlyPlayingUI(message.data);
-                
-                // Disconnect WebSocket if no pattern is running
-                if (!message.data.is_running) {
-                    console.log('No pattern running, disconnecting WebSocket');
-                    disconnectStatusWebSocket();
-                }
-            }
-        } catch (error) {
-            console.error('Error processing status update:', error);
-            console.error('Raw data that caused error:', event.data);
-        }
-    };
-
-    statusSocket.onclose = () => {
-        console.log('Status WebSocket disconnected');
-        wsConnected = false;
-        clearInterval(statusUpdateInterval);
-        
-        // Only attempt to reconnect if we're supposed to be connected
-        if (reconnectAttempts < maxReconnectAttempts && document.body.classList.contains('playing')) {
-            reconnectAttempts++;
-            const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-            console.log(`Reconnecting in ${delay/1000}s (Attempt ${reconnectAttempts}/${maxReconnectAttempts})`);
-            setTimeout(connectStatusWebSocket, delay);
-        }
-    };
-
-    statusSocket.onerror = (error) => {
-        console.error('WebSocket error:', error);
-    };
-}
-
-function disconnectStatusWebSocket() {
-    if (statusSocket && wsConnected) {
-        wsConnected = false;
-        statusSocket.close();
-        statusSocket = null;
-        reconnectAttempts = 0;
-    }
-}
-
-// Replace the polling mechanism with WebSocket
-document.addEventListener('DOMContentLoaded', () => {
-    const activeTab = getCookie('activeTab') || 'patterns'; // Default to 'patterns' tab
-    switchTab(activeTab); // Load the active tab
-    checkSerialStatus(); // Check connection status
-    loadThetaRhoFiles(); // Load files on page load
-    loadAllPlaylists(); // Load all playlists on page load
-    attachSettingsSaveListeners(); // Attach event listeners to save changes
-    attachFullScreenListeners();
-    loadWledIp();
-    updateWledUI();
-
-    // Initialize WebSocket connection for status updates
-    connectStatusWebSocket();
-
-    // Handle visibility change
-    document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible' && statusSocket && statusSocket.readyState !== WebSocket.OPEN) {
-            connectStatusWebSocket();
-        }
-    });
-
-    checkForUpdates();
-});
-
-// Track the last time we had a file playing
-let lastPlayingTime = 0;
-const HIDE_DELAY = 5000; // 1 second delay before hiding
-
-// Update the updateCurrentlyPlayingUI function to handle WebSocket updates
-// Track the last played file to detect when a new pattern starts
-let lastPlayedFile = null;
-
-function updateCurrentlyPlayingUI(status) {
-    console.log('Updating UI with status:', status);
-
-    // Get all required DOM elements once
-    const container = document.getElementById('currently-playing-container');
-    const fileNameElement = document.getElementById('currently-playing-file');
-    const progressBar = document.getElementById('play_progress');
-    const progressText = document.getElementById('play_progress_text');
-    const pausePlayButton = document.getElementById('pausePlayCurrent');
-    const speedDisplay = document.getElementById('current_speed_display');
-
-    // Check if all required elements exist
-    if (!container || !fileNameElement || !progressBar || !progressText) {
-        console.log('Required DOM elements not found:', {
-            container: !!container,
-            fileNameElement: !!fileNameElement,
-            progressBar: !!progressBar,
-            progressText: !!progressText
-        });
-        setTimeout(() => updateCurrentlyPlayingUI(status), 100);
-        return;
-    }
-
-    // Update container visibility based on status
-    if (status.current_file && status.is_running) {
-        document.body.classList.add('playing');
-        container.style.display = 'flex';
-        
-        // Hide the preview container when a pattern is playing
-        const previewContainer = document.getElementById('pattern-preview-container');
-        if (previewContainer) {
-            previewContainer.classList.add('hidden');
-            previewContainer.classList.remove('visible');
-            // Clear any selected file highlights
-            document.querySelectorAll('#theta_rho_files .file-item').forEach(item => {
-                item.classList.remove('selected');
-            });
-        }
-    } else {
-        document.body.classList.remove('playing');
-        container.style.display = 'none';
-    }
-
-    // Update file name display
-    if (status.current_file) {
-        const fileName = status.current_file.replace('./patterns/', '');
-        fileNameElement.textContent = fileName;
-    } else {
-        fileNameElement.textContent = 'No pattern playing';
-    }
-
-    // Update next file display
-    const nextFileElement = document.getElementById('next-file');
-    if (nextFileElement) {
-        if (status.playlist && status.playlist.next_file) {
-            const nextFileName = status.playlist.next_file.replace('./patterns/', '');
-            nextFileElement.textContent = `(Next: ${nextFileName})`;
-            nextFileElement.style.display = 'block';
-        } else {
-            nextFileElement.style.display = 'none';
-        }
-    }
-
-    // Update speed display if it exists
-    if (speedDisplay && status.speed) {
-        speedDisplay.textContent = `Current Speed: ${status.speed}`;
-    }
-
-    // Update pattern preview if it's a new pattern
-    if (status.current_file && lastPlayedFile !== status.current_file) {
-        lastPlayedFile = status.current_file;
-        const cleanFileName = status.current_file.replace('./patterns/', '');
-        previewPattern(cleanFileName, 'currently-playing-container');
-    }
-
-    // Update progress information
-    if (status.progress) {
-        const { percentage, remaining_time, elapsed_time } = status.progress;
-        const formattedPercentage = percentage.toFixed(1);
-        const remainingText = remaining_time === null ? 'calculating...' : formatSecondsToHMS(remaining_time);
-        const elapsedText = formatSecondsToHMS(elapsed_time);
-
-        progressBar.value = formattedPercentage;
-        progressText.textContent = `${formattedPercentage}% (Elapsed: ${elapsedText} | Remaining: ${remainingText})`;
-    } else {
-        progressBar.value = 0;
-        progressText.textContent = '0%';
-    }
-
-    // Update pause/play button if it exists
-    if (pausePlayButton) {
-        pausePlayButton.innerHTML = status.is_paused ? 
-            '<i class="fa-solid fa-play"></i>' : 
-            '<i class="fa-solid fa-pause"></i>';
-    }
-
-    // Update playlist UI if the function exists
-    if (typeof updatePlaylistUI === 'function') {
-        updatePlaylistUI(status);
-    }
 }
