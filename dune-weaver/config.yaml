@@ -1,6 +1,6 @@
 name: "Dune Weaver"
 description: "Control your Dune Weaver sand table device"
-version: "1.0.0"
+version: "1.0.1"
 slug: "dune_weaver"
 init: false
 arch:
