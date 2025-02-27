@@ -4,6 +4,34 @@ let playlist = [];
 let selectedPlaylistIndex = null;
 let allFiles = [];
 
+// Determine the base URL for API requests
+// This handles both direct access and Home Assistant ingress
+const getBaseUrl = () => {
+    // Check if we're in Home Assistant
+    const isHomeAssistant = window.location.pathname.includes('/api/hassio_ingress/');
+    
+    if (isHomeAssistant) {
+        // We're in Home Assistant, use the current path as the base URL
+        return window.location.pathname;
+    } else {
+        // We're accessing the app directly, use the root path
+        return '';
+    }
+};
+
+// Get the base URL once at startup
+const baseUrl = getBaseUrl();
+console.log('Using base URL for API requests:', baseUrl);
+
+// Helper function to build API URLs
+const apiUrl = (endpoint) => {
+    // Remove leading slash if present
+    if (endpoint.startsWith('/')) {
+        endpoint = endpoint.substring(1);
+    }
+    return `${baseUrl}/${endpoint}`;
+};
+
 // Define constants for log message types
 const LOG_TYPE = {
     SUCCESS: 'success',
@@ -154,27 +182,16 @@ async function selectFile(file, listItem) {
 // Fetch and display Theta-Rho files
 async function loadThetaRhoFiles() {
     try {
-        logMessage('Loading Theta-Rho files...');
-        const response = await fetch('/list_theta_rho_files');
-        let files = await response.json();
-
-        files = files.filter(file => file.endsWith('.thr'));
-        // Sort files with custom_patterns on top and all alphabetically sorted
-        const sortedFiles = files.sort((a, b) => {
-            const isCustomA = a.startsWith('custom_patterns/');
-            const isCustomB = b.startsWith('custom_patterns/');
-
-            if (isCustomA && !isCustomB) return -1; // a comes first
-            if (!isCustomA && isCustomB) return 1;  // b comes first
-            return a.localeCompare(b);             // Alphabetical comparison
-        });
-
-        allFiles = sortedFiles; // Update global files
-        displayFiles(sortedFiles); // Display sorted files
-
-        logMessage('Theta-Rho files loaded and sorted successfully.');
+        const response = await fetch(apiUrl('/list_theta_rho_files'));
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const files = await response.json();
+        allFiles = files;
+        displayFiles(files);
     } catch (error) {
-        logMessage(`Error loading Theta-Rho files: ${error.message}`, 'error');
+        console.error('Error loading theta-rho files:', error);
+        logMessage(`Error loading files: ${error.message}`, LOG_TYPE.ERROR);
     }
 }
 
@@ -210,118 +227,145 @@ function searchPatternFiles() {
 async function uploadThetaRho() {
     const fileInput = document.getElementById('upload_file');
     const file = fileInput.files[0];
+    
     if (!file) {
-        logMessage('No file selected for upload.', LOG_TYPE.ERROR);
+        logMessage('Please select a file to upload', LOG_TYPE.WARNING);
         return;
     }
-
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    
     try {
-        logMessage(`Uploading file: ${file.name}...`);
-        const formData = new FormData();
-        formData.append('file', file);
-
-        const response = await fetch('/upload_theta_rho', {
+        logMessage(`Uploading ${file.name}...`, LOG_TYPE.INFO);
+        const response = await fetch(apiUrl('/upload_theta_rho'), {
             method: 'POST',
             body: formData
         });
-
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
         const result = await response.json();
         if (result.success) {
-            logMessage(`File uploaded successfully: ${file.name}`, LOG_TYPE.SUCCESS);
-            fileInput.value = '';
-            await loadThetaRhoFiles();
+            logMessage(`File ${file.name} uploaded successfully`, LOG_TYPE.SUCCESS);
+            loadThetaRhoFiles(); // Refresh the file list
+            fileInput.value = ''; // Clear the file input
+            toggleSecondaryButtons('add-pattern-container'); // Hide the upload form
         } else {
-            logMessage(`Failed to upload file: ${file.name}`, LOG_TYPE.ERROR);
+            logMessage(`Failed to upload file: ${result.message || 'Unknown error'}`, LOG_TYPE.ERROR);
         }
     } catch (error) {
-        logMessage(`Error uploading file: ${error.message}`);
+        console.error('Error uploading file:', error);
+        logMessage(`Error uploading file: ${error.message}`, LOG_TYPE.ERROR);
     }
 }
 
 async function runThetaRho() {
     if (!selectedFile) {
-        logMessage("No file selected to run.");
+        logMessage('No file selected', LOG_TYPE.WARNING);
         return;
     }
-
-    // Get the selected pre-execution action
-    const preExecutionAction = document.getElementById('pre_execution').value;
-
-    logMessage(`Running file: ${selectedFile} with pre-execution action: ${preExecutionAction}...`);
+    
     try {
-        const response = await fetch('/run_theta_rho', {
+        const preExecution = document.getElementById('pre_execution').value;
+        
+        const requestData = {
+            file_name: selectedFile,
+            pre_execution: preExecution
+        };
+        
+        logMessage(`Running pattern: ${selectedFile}`, LOG_TYPE.INFO);
+        document.body.classList.add('playing');
+        
+        // Connect WebSocket when starting a pattern
+        connectStatusWebSocket();
+        
+        const response = await fetch(apiUrl('/run_theta_rho'), {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                file_name: selectedFile, 
-                pre_execution: preExecutionAction 
-            })
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(requestData)
         });
-
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
         const result = await response.json();
-        if (response.ok) {
-            // Connect WebSocket when starting a pattern
-            connectStatusWebSocket();
-            
-            // Show the currently playing UI immediately
-            document.body.classList.add('playing');
-            const currentlyPlayingFile = document.getElementById('currently-playing-file');
-            if (currentlyPlayingFile) {
-                currentlyPlayingFile.textContent = selectedFile.replace('./patterns/', '');
-            }
-            // Show initial preview
-            previewPattern(selectedFile.replace('./patterns/', ''), 'currently-playing-container');
-            logMessage(`Pattern running: ${selectedFile}`, LOG_TYPE.SUCCESS);
+        if (result.success) {
+            logMessage(`Pattern ${selectedFile} started successfully`, LOG_TYPE.SUCCESS);
+            document.getElementById('currently-playing-file').textContent = selectedFile;
+            document.getElementById('next-file').textContent = '';
+            showCurrentlyPlaying();
         } else {
-            if (response.status === 409) {
-                logMessage("Cannot start pattern: Another pattern is already running", LOG_TYPE.WARNING);
-            } else {
-                logMessage(`Failed to run file: ${result.detail || 'Unknown error'}`, LOG_TYPE.ERROR);
-            }
+            logMessage(`Failed to run pattern: ${result.detail || 'Unknown error'}`, LOG_TYPE.ERROR);
+            document.body.classList.remove('playing');
         }
     } catch (error) {
+        console.error('Error running pattern:', error);
         logMessage(`Error running pattern: ${error.message}`, LOG_TYPE.ERROR);
+        document.body.classList.remove('playing');
     }
 }
 
 async function stopExecution() {
-    logMessage('Stopping execution...');
-    const response = await fetch('/stop_execution', { method: 'POST' });
-    const result = await response.json();
-    if (result.success) {
-        logMessage('Execution stopped.',LOG_TYPE.SUCCESS);
-    } else {
-        logMessage('Failed to stop execution.',LOG_TYPE.ERROR);
+    try {
+        const response = await fetch(apiUrl('/stop_execution'), { method: 'POST' });
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const result = await response.json();
+        if (result.success) {
+            logMessage('Execution stopped', LOG_TYPE.SUCCESS);
+            document.body.classList.remove('playing');
+            hideCurrentlyPlaying();
+        } else {
+            logMessage(`Failed to stop execution: ${result.detail || 'Unknown error'}`, LOG_TYPE.ERROR);
+        }
+    } catch (error) {
+        console.error('Error stopping execution:', error);
+        logMessage(`Error stopping execution: ${error.message}`, LOG_TYPE.ERROR);
     }
 }
 
 let isPaused = false;
 
 function togglePausePlay() {
-    const button = document.getElementById("pausePlayCurrent");
-
+    const button = document.getElementById('pausePlayCurrent');
+    const isPaused = button.querySelector('i').classList.contains('fa-play');
+    
     if (isPaused) {
         // Resume execution
-        fetch('/resume_execution', { method: 'POST' })
+        fetch(apiUrl('/resume_execution'), { method: 'POST' })
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    isPaused = false;
-                    button.innerHTML = "<i class=\"fa-solid fa-pause\"></i>"; // Change to pause icon
+                    button.querySelector('i').classList.remove('fa-play');
+                    button.querySelector('i').classList.add('fa-pause');
+                    logMessage('Execution resumed', LOG_TYPE.SUCCESS);
                 }
             })
-            .catch(error => console.error("Error resuming execution:", error));
+            .catch(error => {
+                logMessage(`Error resuming execution: ${error.message}`, LOG_TYPE.ERROR);
+            });
     } else {
         // Pause execution
-        fetch('/pause_execution', { method: 'POST' })
+        fetch(apiUrl('/pause_execution'), { method: 'POST' })
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    isPaused = true;
-                    button.innerHTML = "<i class=\"fa-solid fa-play\"></i>"; // Change to play icon
+                    button.querySelector('i').classList.remove('fa-pause');
+                    button.querySelector('i').classList.add('fa-play');
+                    logMessage('Execution paused', LOG_TYPE.SUCCESS);
                 }
             })
-            .catch(error => console.error("Error pausing execution:", error));
+            .catch(error => {
+                logMessage(`Error pausing execution: ${error.message}`, LOG_TYPE.ERROR);
+            });
     }
 }
 
@@ -346,7 +390,7 @@ async function removeCustomPattern(fileName) {
 
     try {
         logMessage(`Deleting pattern: ${fileName}...`);
-        const response = await fetch('/delete_theta_rho_file', {
+        const response = await fetch(apiUrl('/delete_theta_rho_file'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ file_name: fileName })
@@ -378,7 +422,7 @@ async function removeCustomPattern(fileName) {
 async function previewPattern(fileName, containerId = 'pattern-preview-container') {
     try {
         logMessage(`Fetching data to preview file: ${fileName}...`);
-        const response = await fetch('/preview_thr', {
+        const response = await fetch(apiUrl('/preview_thr'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ file_name: fileName })
@@ -483,7 +527,7 @@ function renderPattern(coordinates, canvasId) {
 
 async function moveToCenter() {
     logMessage('Moving to center...', LOG_TYPE.INFO);
-    const response = await fetch('/move_to_center', { method: 'POST' });
+    const response = await fetch(apiUrl('/move_to_center'), { method: 'POST' });
     const result = await response.json();
     if (result.success) {
         logMessage('Moved to center successfully.', LOG_TYPE.SUCCESS);
@@ -494,7 +538,7 @@ async function moveToCenter() {
 
 async function moveToPerimeter() {
     logMessage('Moving to perimeter...', LOG_TYPE.INFO);
-    const response = await fetch('/move_to_perimeter', { method: 'POST' });
+    const response = await fetch(apiUrl('/move_to_perimeter'), { method: 'POST' });
     const result = await response.json();
     if (result.success) {
         logMessage('Moved to perimeter successfully.', LOG_TYPE.SUCCESS);
@@ -513,7 +557,7 @@ async function sendCoordinate() {
     }
 
     logMessage(`Sending coordinate: θ=${theta}, ρ=${rho}...`);
-    const response = await fetch('/send_coordinate', {
+    const response = await fetch(apiUrl('/send_coordinate'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ theta, rho })
@@ -528,7 +572,7 @@ async function sendCoordinate() {
 }
 
 async function sendHomeCommand() {
-    const response = await fetch('/send_home', { method: 'POST' });
+    const response = await fetch(apiUrl('/send_home'), { method: 'POST' });
     const result = await response.json();
     if (result.success) {
         logMessage('HOME command sent successfully.', LOG_TYPE.SUCCESS);
@@ -540,7 +584,7 @@ async function sendHomeCommand() {
 async function runClearIn() {
     logMessage('Running clear from center pattern...', LOG_TYPE.INFO);
     try {
-        const response = await fetch('/run_theta_rho', {
+        const response = await fetch(apiUrl('/run_theta_rho'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -571,7 +615,7 @@ async function runClearIn() {
 async function runClearOut() {
     logMessage('Running clear from perimeter pattern...', LOG_TYPE.INFO);
     try {
-        const response = await fetch('/run_theta_rho', {
+        const response = await fetch(apiUrl('/run_theta_rho'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -602,7 +646,7 @@ async function runClearOut() {
 async function runClearSide() {
     logMessage('Running clear sideways pattern...', LOG_TYPE.INFO);
     try {
-        const response = await fetch('/run_theta_rho', {
+        const response = await fetch(apiUrl('/run_theta_rho'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -658,7 +702,7 @@ function executeClearAction(actionFunction) {
 }
 
 async function runFile(fileName) {
-    const response = await fetch(`/run_theta_rho_file/${fileName}`, { method: 'POST' });
+    const response = await fetch(apiUrl(`/run_theta_rho_file/${fileName}`), { method: 'POST' });
     const result = await response.json();
     if (result.success) {
         logMessage(`Running file: ${fileName}`, LOG_TYPE.SUCCESS);
@@ -669,7 +713,7 @@ async function runFile(fileName) {
 
 // Connection Status
 async function checkSerialStatus() {
-    const response = await fetch('/serial_status');
+    const response = await fetch(apiUrl('/serial_status'));
     const status = await response.json();
     const statusElement = document.getElementById('serial_status');
     const statusHeaderElement = document.getElementById('connection_status_header');
@@ -725,7 +769,7 @@ async function checkSerialStatus() {
 }
 
 async function loadSerialPorts() {
-    const response = await fetch('/list_serial_ports');
+    const response = await fetch(apiUrl('/list_serial_ports'));
     const ports = await response.json();
     const select = document.getElementById('serial_ports');
     select.innerHTML = '';
@@ -740,7 +784,7 @@ async function loadSerialPorts() {
 
 async function connectSerial() {
     const port = document.getElementById('serial_ports').value;
-    const response = await fetch('/connect', {
+    const response = await fetch(apiUrl('/connect'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ port })
@@ -757,7 +801,7 @@ async function connectSerial() {
 }
 
 async function disconnectSerial() {
-    const response = await fetch('/disconnect', { method: 'POST' });
+    const response = await fetch(apiUrl('/disconnect'), { method: 'POST' });
     const result = await response.json();
     if (result.success) {
         logMessage('Serial port disconnected.', LOG_TYPE.SUCCESS);
@@ -770,7 +814,7 @@ async function disconnectSerial() {
 
 async function restartSerial() {
     const port = document.getElementById('serial_ports').value;
-    const response = await fetch('/restart_connection', {
+    const response = await fetch(apiUrl('/restart_connection'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ port })
@@ -791,7 +835,7 @@ async function restartSerial() {
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 async function checkForUpdates() {
     try {
-        const response = await fetch('/check_software_update');
+        const response = await fetch(apiUrl('/check_software_update'));
         const data = await response.json();
 
         // Handle updates available logic
@@ -829,7 +873,7 @@ async function updateSoftware() {
         updateButton.disabled = true;
         updateButton.querySelector('span').textContent = 'Updating...';
 
-        const response = await fetch('/update_software', { method: 'POST' });
+        const response = await fetch(apiUrl('/update_software'), { method: 'POST' });
         const data = await response.json();
 
         if (data.success) {
@@ -854,7 +898,7 @@ async function updateSoftware() {
 
 async function loadAllPlaylists() {
     try {
-        const response = await fetch('/list_all_playlists'); // GET
+        const response = await fetch(apiUrl('/list_all_playlists')); // GET
         const allPlaylists = await response.json();          // e.g. ["My Playlist", "Summer", ...]
         displayAllPlaylists(allPlaylists);
     } catch (err) {
@@ -947,7 +991,7 @@ async function runPlaylist() {
     const shuffle = document.getElementById('shuffle_playlist').checked;
 
     try {
-        const response = await fetch('/run_playlist', {
+        const response = await fetch(apiUrl('/run_playlist'), {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -990,7 +1034,7 @@ let isPlaylistChanged = false;
 async function loadPlaylist(playlistName) {
     try {
         logMessage(`Loading playlist: ${playlistName}`);
-        const response = await fetch(`/get_playlist?name=${encodeURIComponent(playlistName)}`);
+        const response = await fetch(apiUrl(`/get_playlist?name=${encodeURIComponent(playlistName)}`));
 
         const data = await response.json();
 
@@ -1032,7 +1076,7 @@ async function savePlaylist() {
     try {
         // We can use /create_playlist or /modify_playlist. They do roughly the same in our single-file approach.
         // Let's use /create_playlist to always overwrite or create anew.
-        const response = await fetch('/create_playlist', {
+        const response = await fetch(apiUrl('/create_playlist'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1063,7 +1107,7 @@ async function savePlaylist() {
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 // Toggle the rename playlist input
 function populatePlaylistDropdown() {
-    return fetch('/list_all_playlists')
+    return fetch(apiUrl('/list_all_playlists'))
         .then(response => response.json())
         .then(playlists => {
             const select = document.getElementById('select-playlist');
@@ -1124,7 +1168,7 @@ async function confirmAddPlaylist() {
 
     try {
         logMessage(`Adding new playlist: "${playlistName}"...`);
-        const response = await fetch('/create_playlist', {
+        const response = await fetch(apiUrl('/create_playlist'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1172,7 +1216,7 @@ async function confirmRenamePlaylist() {
 
     try {
         // Step 1: Create/Modify the playlist with the new name
-        const createResponse = await fetch('/modify_playlist', {
+        const createResponse = await fetch(apiUrl('/modify_playlist'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1186,7 +1230,7 @@ async function confirmRenamePlaylist() {
             logMessage(createResult.message, LOG_TYPE.SUCCESS);
 
             // Step 2: Delete the old playlist
-            const deleteResponse = await fetch('/delete_playlist', {
+            const deleteResponse = await fetch(apiUrl('/delete_playlist'), {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ playlist_name: currentName })
@@ -1224,7 +1268,7 @@ async function deleteCurrentPlaylist() {
     }
 
     try {
-        const response = await fetch('/delete_playlist', {
+        const response = await fetch(apiUrl('/delete_playlist'), {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ playlist_name: playlistName })
@@ -1396,7 +1440,7 @@ async function saveToPlaylist() {
 
     try {
         logMessage(`Adding pattern "${selectedFile}" to playlist "${playlist}"...`);
-        const response = await fetch('/add_to_playlist', {
+        const response = await fetch(apiUrl('/add_to_playlist'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ playlist_name: playlist, pattern: selectedFile })
@@ -1429,7 +1473,7 @@ async function changeSpeed() {
     }
 
     logMessage(`Setting speed to: ${speed}...`);
-    const response = await fetch('/set_speed', {
+    const response = await fetch(apiUrl('/set_speed'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ speed })
@@ -1677,7 +1721,7 @@ async function saveWledIp() {
 
         // Also clear the IP on the backend
         try {
-            const response = await fetch('/set_wled_ip', {
+            const response = await fetch(apiUrl('/set_wled_ip'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ wled_ip: null })
@@ -1705,7 +1749,7 @@ async function saveWledIp() {
 
         // Also save the IP to the backend
         try {
-            const response = await fetch('/set_wled_ip', {
+            const response = await fetch(apiUrl('/set_wled_ip'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ wled_ip: ip })
@@ -1733,7 +1777,7 @@ async function loadWledIp() {
     if (!savedIp) {
         // Attempt to load from the backend if not found in localStorage
         try {
-            const response = await fetch('/get_wled_ip');
+            const response = await fetch(apiUrl('/get_wled_ip'));
             const data = await response.json();
             if (data.wled_ip) {
                 savedIp = data.wled_ip;
@@ -1786,30 +1830,43 @@ themeIcon.className = savedTheme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
 // Add WebSocket connection for status updates
 let statusSocket = null;
 let reconnectAttempts = 0;
-const MAX_RECONNECT_ATTEMPTS = 5;
+const maxReconnectAttempts = 5;
 let statusUpdateInterval = null;
 let wsConnected = false;
 
 function connectStatusWebSocket() {
-    // Don't create a new connection if one already exists
-    if (wsConnected) {
+    if (statusSocket && statusSocket.readyState === WebSocket.OPEN) {
         console.log('WebSocket already connected');
         return;
     }
-
-    // Close existing connection and clear interval if any
-    if (statusSocket) {
-        statusSocket.close();
+    
+    if (reconnectAttempts >= maxReconnectAttempts) {
+        console.log('Max reconnect attempts reached, giving up');
+        return;
     }
-    if (statusUpdateInterval) {
-        clearInterval(statusUpdateInterval);
-    }
-
+    
+    reconnectAttempts++;
+    
     // Create WebSocket connection
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    statusSocket = new WebSocket(`${protocol}//${window.location.host}/ws/status`);
-
-    statusSocket.onopen = () => {
+    const wsEndpoint = 'ws/status';
+    
+    // Build the WebSocket URL based on the base URL
+    let wsUrl;
+    if (baseUrl) {
+        // We're in Home Assistant, use the base URL
+        // Remove leading slash if present
+        const baseUrlWithoutLeadingSlash = baseUrl.replace(/^\//, '');
+        wsUrl = `${protocol}//${window.location.host}/${baseUrlWithoutLeadingSlash}/${wsEndpoint}`;
+    } else {
+        // We're accessing the app directly
+        wsUrl = `${protocol}//${window.location.host}/${wsEndpoint}`;
+    }
+    
+    console.log('Connecting to WebSocket at:', wsUrl);
+    statusSocket = new WebSocket(wsUrl);
+    
+    statusSocket.onopen = function(e) {
         console.log('Status WebSocket connected');
         wsConnected = true;
         reconnectAttempts = 0; // Reset reconnect attempts on successful connection
@@ -1839,10 +1896,10 @@ function connectStatusWebSocket() {
         clearInterval(statusUpdateInterval);
         
         // Only attempt to reconnect if we're supposed to be connected
-        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS && document.body.classList.contains('playing')) {
+        if (reconnectAttempts < maxReconnectAttempts && document.body.classList.contains('playing')) {
             reconnectAttempts++;
             const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-            console.log(`Reconnecting in ${delay/1000}s (Attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+            console.log(`Reconnecting in ${delay/1000}s (Attempt ${reconnectAttempts}/${maxReconnectAttempts})`);
             setTimeout(connectStatusWebSocket, delay);
         }
     };
