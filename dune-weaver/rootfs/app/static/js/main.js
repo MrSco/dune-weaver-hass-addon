@@ -27,6 +27,9 @@ const apiUrl = (endpoint) => {
     // Remove leading slash if present to prevent double slashes
     const cleanEndpoint = endpoint.startsWith('/') ? endpoint.substring(1) : endpoint;
     
+    // For debugging
+    console.log(`Building API URL for endpoint "${endpoint}"`);
+    
     let result;
     // If we're in Home Assistant, use the ingress path
     if (baseUrl) {
@@ -42,7 +45,8 @@ const apiUrl = (endpoint) => {
         result = '/' + cleanEndpoint;
     }
     
-    console.log(`API URL for endpoint "${endpoint}": ${result}`);
+    // Log the final URL for debugging
+    console.log(`Final API URL: ${result}`);
     return result;
 };
 
@@ -277,51 +281,46 @@ async function uploadThetaRho() {
 }
 
 async function runThetaRho() {
-    if (!selectedFile) {
-        logMessage('No file selected', LOG_TYPE.WARNING);
-        return;
-    }
-    
     try {
+        const selectedFile = document.querySelector('#theta_rho_files li.selected');
+        if (!selectedFile) {
+            logMessage('No pattern selected', LOG_TYPE.WARNING);
+            return;
+        }
+
+        const fileName = selectedFile.getAttribute('data-file');
         const preExecution = document.getElementById('pre_execution').value;
-        
-        const requestData = {
-            file_name: selectedFile,
-            pre_execution: preExecution
-        };
-        
-        logMessage(`Running pattern: ${selectedFile}`, LOG_TYPE.INFO);
-        document.body.classList.add('playing');
-        
-        // Connect WebSocket when starting a pattern
-        connectStatusWebSocket();
-        
+
+        logMessage(`Running pattern: ${fileName}`, LOG_TYPE.INFO);
+
         const response = await fetch(apiUrl('/run_theta_rho'), {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify(requestData)
+            body: JSON.stringify({
+                file_name: fileName,
+                pre_execution: preExecution
+            })
         });
-        
+
+        // Check if the response is OK before trying to parse JSON
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            const errorText = await response.text();
+            throw new Error(`Failed to run pattern: ${response.status} ${response.statusText} - ${errorText}`);
         }
-        
-        const result = await response.json();
-        if (result.success) {
-            logMessage(`Pattern ${selectedFile} started successfully`, LOG_TYPE.SUCCESS);
-            document.getElementById('currently-playing-file').textContent = selectedFile;
-            document.getElementById('next-file').textContent = '';
-            showCurrentlyPlaying();
+
+        const data = await response.json();
+
+        if (data.success) {
+            logMessage(`Pattern ${fileName} started successfully`, LOG_TYPE.SUCCESS);
+            document.body.classList.add('playing');
         } else {
-            logMessage(`Failed to run pattern: ${result.detail || 'Unknown error'}`, LOG_TYPE.ERROR);
-            document.body.classList.remove('playing');
+            logMessage(`Failed to run pattern: ${data.detail || 'Unknown error'}`, LOG_TYPE.ERROR);
         }
     } catch (error) {
         console.error('Error running pattern:', error);
         logMessage(`Error running pattern: ${error.message}`, LOG_TYPE.ERROR);
-        document.body.classList.remove('playing');
     }
 }
 
@@ -727,120 +726,248 @@ async function runFile(fileName) {
 
 // Connection Status
 async function checkSerialStatus() {
-    const response = await fetch(apiUrl('/serial_status'));
-    const status = await response.json();
-    const statusElement = document.getElementById('serial_status');
-    const statusHeaderElement = document.getElementById('connection_status_header');
-    const serialPortsContainer = document.getElementById('serial_ports_container');
-    const selectElement = document.getElementById('serial_ports');
+    try {
+        const response = await fetch(apiUrl('/serial_status'));
+        
+        // Check if the response is OK before trying to parse JSON
+        if (!response.ok) {
+            console.log(`Failed to check serial status (status: ${response.status})`);
+            updateSerialUIDisconnected();
+            return; // Exit early if the request failed
+        }
+        
+        const status = await response.json();
+        const statusElement = document.getElementById('serial_status');
+        const statusHeaderElement = document.getElementById('connection_status_header');
+        const serialPortsContainer = document.getElementById('serial_ports_container');
+        const selectElement = document.getElementById('serial_ports');
 
-    const connectButton = document.querySelector('button[onclick="connectSerial()"]');
-    const disconnectButton = document.querySelector('button[onclick="disconnectSerial()"]');
-    const restartButton = document.querySelector('button[onclick="restartSerial()"]');
+        const connectButton = document.querySelector('button[onclick="connectSerial()"]');
+        const disconnectButton = document.querySelector('button[onclick="disconnectSerial()"]');
+        const restartButton = document.querySelector('button[onclick="restartSerial()"]');
 
-    if (status.connected) {
-        const port = status.port || 'Unknown'; // Fallback if port is undefined
-        statusElement.textContent = `Connected to ${port}`;
-        statusElement.classList.add('connected');
-        statusElement.classList.remove('not-connected');
-        logMessage(`Connected to serial port: ${port}`);
+        if (status.connected) {
+            const port = status.port || 'Unknown'; // Fallback if port is undefined
+            if (statusElement) {
+                statusElement.textContent = `Connected to ${port}`;
+                statusElement.classList.add('connected');
+                statusElement.classList.remove('not-connected');
+            }
+            logMessage(`Connected to serial port: ${port}`);
 
-        // Update header status
-        statusHeaderElement.classList.add('connected');
-        statusHeaderElement.classList.remove('not-connected');
-
-        // Hide Available Ports and show disconnect/restart buttons
-        serialPortsContainer.style.display = 'none';
-        connectButton.style.display = 'none';
-        disconnectButton.style.display = 'flex';
-        restartButton.style.display = 'flex';
-
-        // Preselect the connected port in the dropdown
-        const newOption = document.createElement('option');
-        newOption.value = port;
-        newOption.textContent = port;
-        selectElement.appendChild(newOption);
-        selectElement.value = port;
-    } else {
-        statusElement.textContent = 'Not connected';
-        statusElement.classList.add('not-connected');
-        statusElement.classList.remove('connected');
-        logMessage('No active connection.');
-
-        // Update header status
-        statusHeaderElement.classList.add('not-connected');
-        statusHeaderElement.classList.remove('connected');
-
-        // Show Available Ports and the connect button
-        serialPortsContainer.style.display = 'block';
-        connectButton.style.display = 'flex';
-        disconnectButton.style.display = 'none';
-        restartButton.style.display = 'none';
-
-        // Attempt to auto-load available ports
-        await loadSerialPorts();
+            // Update header status
+            if (statusHeaderElement) {
+                statusHeaderElement.classList.add('connected');
+                statusHeaderElement.classList.remove('not-connected');
+            }
+            
+            // Update button states
+            if (connectButton) connectButton.disabled = true;
+            if (disconnectButton) disconnectButton.disabled = false;
+            if (restartButton) restartButton.disabled = false;
+            
+            // Hide serial ports dropdown when connected
+            if (serialPortsContainer) serialPortsContainer.style.display = 'none';
+        } else {
+            updateSerialUIDisconnected();
+        }
+    } catch (error) {
+        console.log(`Error checking serial status: ${error.message}`);
+        updateSerialUIDisconnected();
     }
 }
 
+// Helper function to update UI for disconnected state
+function updateSerialUIDisconnected() {
+    const statusElement = document.getElementById('serial_status');
+    const statusHeaderElement = document.getElementById('connection_status_header');
+    const serialPortsContainer = document.getElementById('serial_ports_container');
+    const connectButton = document.querySelector('button[onclick="connectSerial()"]');
+    const disconnectButton = document.querySelector('button[onclick="disconnectSerial()"]');
+    const restartButton = document.querySelector('button[onclick="restartSerial()"]');
+    
+    if (statusElement) {
+        statusElement.textContent = 'Not connected';
+        statusElement.classList.remove('connected');
+        statusElement.classList.add('not-connected');
+    }
+    
+    if (statusHeaderElement) {
+        statusHeaderElement.classList.remove('connected');
+        statusHeaderElement.classList.add('not-connected');
+    }
+    
+    // Update button states
+    if (connectButton) connectButton.disabled = false;
+    if (disconnectButton) disconnectButton.disabled = true;
+    if (restartButton) restartButton.disabled = true;
+    
+    // Show serial ports dropdown when disconnected
+    if (serialPortsContainer) serialPortsContainer.style.display = 'block';
+    
+    // Load serial ports
+    loadSerialPorts();
+}
+
 async function loadSerialPorts() {
-    const response = await fetch(apiUrl('/list_serial_ports'));
-    const ports = await response.json();
-    const select = document.getElementById('serial_ports');
-    select.innerHTML = '';
-    ports.forEach(port => {
-        const option = document.createElement('option');
-        option.value = port;
-        option.textContent = port;
-        select.appendChild(option);
-    });
-    logMessage('Serial ports loaded.');
+    try {
+        const response = await fetch(apiUrl('/list_serial_ports'));
+        
+        // Check if the response is OK before trying to parse JSON
+        if (!response.ok) {
+            console.log(`Failed to load serial ports (status: ${response.status})`);
+            return; // Exit early if the request failed
+        }
+        
+        const ports = await response.json();
+        const select = document.getElementById('serial_ports');
+        
+        if (!select) {
+            console.log('Serial ports select element not found');
+            return;
+        }
+        
+        select.innerHTML = '';
+        
+        if (ports && Array.isArray(ports) && ports.length > 0) {
+            ports.forEach(port => {
+                const option = document.createElement('option');
+                option.value = port;
+                option.textContent = port;
+                select.appendChild(option);
+            });
+            logMessage('Serial ports loaded.');
+        } else {
+            // Add a placeholder option if no ports are available
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'No serial ports available';
+            option.disabled = true;
+            option.selected = true;
+            select.appendChild(option);
+            logMessage('No serial ports available.', LOG_TYPE.WARNING);
+        }
+    } catch (error) {
+        console.log(`Error loading serial ports: ${error.message}`);
+        // Don't show error message to user as this is expected behavior in some environments
+    }
 }
 
 async function connectSerial() {
-    const port = document.getElementById('serial_ports').value;
-    const response = await fetch(apiUrl('/connect'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ port })
-    });
-    const result = await response.json();
-    if (result.success) {
-        logMessage(`Connected to serial port: ${port}`, LOG_TYPE.SUCCESS);
-
-        // Refresh the status
-        await checkSerialStatus();
-    } else {
-        logMessage(`Error connecting to serial port: ${result.error}`, LOG_TYPE.ERROR);
+    try {
+        const serialPortSelect = document.getElementById('serial_ports');
+        
+        if (!serialPortSelect) {
+            logMessage('Serial port select element not found', LOG_TYPE.ERROR);
+            return;
+        }
+        
+        const selectedPort = serialPortSelect.value;
+        
+        if (!selectedPort) {
+            logMessage('No port selected', LOG_TYPE.WARNING);
+            return;
+        }
+        
+        logMessage(`Connecting to port: ${selectedPort}`, LOG_TYPE.INFO);
+        
+        const response = await fetch(apiUrl('/connect'), {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ port: selectedPort })
+        });
+        
+        // Check if the response is OK before trying to parse JSON
+        if (!response.ok) {
+            const errorText = await response.text();
+            logMessage(`Failed to connect: ${response.status} ${response.statusText} - ${errorText}`, LOG_TYPE.ERROR);
+            return;
+        }
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            logMessage(`Connected to port ${selectedPort} successfully`, LOG_TYPE.SUCCESS);
+            checkSerialStatus();
+        } else {
+            logMessage(`Failed to connect: ${data.detail || 'Unknown error'}`, LOG_TYPE.ERROR);
+        }
+    } catch (error) {
+        console.error('Error connecting to serial port:', error);
+        logMessage(`Error connecting to serial port: ${error.message}`, LOG_TYPE.ERROR);
     }
 }
 
 async function disconnectSerial() {
-    const response = await fetch(apiUrl('/disconnect'), { method: 'POST' });
-    const result = await response.json();
-    if (result.success) {
-        logMessage('Serial port disconnected.', LOG_TYPE.SUCCESS);
-        // Refresh the status
-        await checkSerialStatus();
-    } else {
-        logMessage(`Error disconnecting: ${result.error}`, LOG_TYPE.ERROR);
+    try {
+        logMessage('Disconnecting serial port...', LOG_TYPE.INFO);
+        
+        const response = await fetch(apiUrl('/disconnect'), { method: 'POST' });
+        
+        // Check if the response is OK before trying to parse JSON
+        if (!response.ok) {
+            const errorText = await response.text();
+            logMessage(`Failed to disconnect: ${errorText || response.statusText}`, LOG_TYPE.ERROR);
+            return; // Exit early if the request failed
+        }
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            logMessage('Serial port disconnected.', LOG_TYPE.SUCCESS);
+            // Refresh the status
+            checkSerialStatus();
+        } else {
+            logMessage(`Error disconnecting: ${result.detail || 'Unknown error'}`, LOG_TYPE.ERROR);
+        }
+    } catch (error) {
+        logMessage(`Error disconnecting serial port: ${error.message}`, LOG_TYPE.ERROR);
     }
 }
 
 async function restartSerial() {
-    const port = document.getElementById('serial_ports').value;
-    const response = await fetch(apiUrl('/restart_connection'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ port })
-    });
-    const result = await response.json();
-    if (result.success) {
-        document.getElementById('serial_status').textContent = `Restarted connection to ${port}`;
-        logMessage('Connection restarted.', LOG_TYPE.SUCCESS);
-
-        // No need to change visibility for restart
-    } else {
-        logMessage(`Error restarting Connection: ${result.error}`, LOG_TYPE.ERROR);
+    try {
+        const portSelect = document.getElementById('serial_ports');
+        
+        if (!portSelect) {
+            logMessage('Serial port select element not found', LOG_TYPE.ERROR);
+            return;
+        }
+        
+        const port = portSelect.value;
+        
+        if (!port) {
+            logMessage('Please select a serial port', LOG_TYPE.WARNING);
+            return;
+        }
+        
+        logMessage(`Restarting connection to ${port}...`, LOG_TYPE.INFO);
+        
+        const response = await fetch(apiUrl('/restart_connection'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ port })
+        });
+        
+        // Check if the response is OK before trying to parse JSON
+        if (!response.ok) {
+            const errorText = await response.text();
+            logMessage(`Failed to restart connection: ${errorText || response.statusText}`, LOG_TYPE.ERROR);
+            return; // Exit early if the request failed
+        }
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            logMessage(`Successfully restarted connection to ${port}`, LOG_TYPE.SUCCESS);
+            checkSerialStatus(); // Refresh the UI
+        } else {
+            logMessage(`Failed to restart connection to ${port}: ${result.detail || 'Unknown error'}`, LOG_TYPE.ERROR);
+        }
+    } catch (error) {
+        logMessage(`Error restarting serial connection: ${error.message}`, LOG_TYPE.ERROR);
     }
 }
 
@@ -850,6 +977,13 @@ async function restartSerial() {
 async function checkForUpdates() {
     try {
         const response = await fetch(apiUrl('/check_software_update'));
+        
+        // Check if the response is OK before trying to parse JSON
+        if (!response.ok) {
+            console.log(`Failed to check for updates (status: ${response.status})`);
+            return; // Exit early if the request failed
+        }
+        
         const data = await response.json();
 
         // Handle updates available logic
@@ -858,51 +992,94 @@ async function checkForUpdates() {
             const updateLinkElement = document.getElementById('update_link');
             const tagLink = `https://github.com/tuanchris/dune-weaver/releases/tag/${data.latest_remote_tag}`;
 
-            updateButton.classList.remove('hidden'); // Show the button
-            logMessage("Software Update Available", LOG_TYPE.INFO, 'open-settings-button')
+            if (updateButton) {
+                updateButton.classList.remove('hidden'); // Show the button
+            }
+            
+            logMessage("Software Update Available", LOG_TYPE.INFO, 'open-settings-button');
 
-            updateLinkElement.innerHTML = `<a href="${tagLink}" target="_blank">View Release Notes </a>`;
-            updateLinkElement.classList.remove('hidden'); // Show the link
+            if (updateLinkElement) {
+                updateLinkElement.innerHTML = `<a href="${tagLink}" target="_blank">View Release Notes </a>`;
+                updateLinkElement.classList.remove('hidden'); // Show the link
+            }
         }
 
         // Update current and latest version in the UI
         const currentVersionElem = document.getElementById('current_git_version');
         const latestVersionElem = document.getElementById('latest_git_version');
-
-        currentVersionElem.textContent = `Current Version: ${data.latest_local_tag || 'Unknown'}`;
-        latestVersionElem.textContent = data.updates_available
-            ? `Latest Version: ${data.latest_remote_tag}`
-            : 'You are up to date!';
-
+        
+        if (currentVersionElem) {
+            currentVersionElem.textContent = data.current_version || 'Unknown';
+        }
+        
+        if (latestVersionElem) {
+            latestVersionElem.textContent = data.latest_remote_tag || 'Unknown';
+        }
     } catch (error) {
-        console.error('Error checking for updates:', error);
+        console.log(`Error checking for updates: ${error.message}`);
+        // Don't show error message to user as this is not critical functionality
     }
 }
 
 async function updateSoftware() {
     const updateButton = document.getElementById('update-software-btn');
+    
+    if (!updateButton) {
+        logMessage('Update button not found', LOG_TYPE.ERROR);
+        return;
+    }
 
     try {
         // Disable the button and update the text
         updateButton.disabled = true;
-        updateButton.querySelector('span').textContent = 'Updating...';
+        const buttonSpan = updateButton.querySelector('span');
+        if (buttonSpan) {
+            buttonSpan.textContent = 'Updating...';
+        }
 
+        logMessage('Starting software update...', LOG_TYPE.INFO);
+        
         const response = await fetch(apiUrl('/update_software'), { method: 'POST' });
+        
+        // Check if the response is OK before trying to parse JSON
+        if (!response.ok) {
+            const errorText = await response.text();
+            logMessage(`Failed to update software: ${errorText || response.statusText}`, LOG_TYPE.ERROR);
+            
+            // Re-enable the button and restore text
+            updateButton.disabled = false;
+            if (buttonSpan) {
+                buttonSpan.textContent = 'Update Software';
+            }
+            return;
+        }
+        
         const data = await response.json();
 
         if (data.success) {
-            logMessage('Software updated successfully!', LOG_TYPE.SUCCESS);
-            window.location.reload(); // Reload the page after update
+            logMessage('Software updated successfully! Reloading page...', LOG_TYPE.SUCCESS);
+            setTimeout(() => window.location.reload(), 3000); // Reload after 3 seconds
         } else {
-            logMessage('Failed to update software: ' + data.error, LOG_TYPE.ERROR);
+            logMessage(`Failed to update software: ${data.error || 'Unknown error'}`, LOG_TYPE.ERROR);
+            
+            // Re-enable the button and restore text
+            updateButton.disabled = false;
+            if (buttonSpan) {
+                buttonSpan.textContent = 'Update Software';
+            }
         }
     } catch (error) {
+        logMessage(`Error updating software: ${error.message}`, LOG_TYPE.ERROR);
         console.error('Error updating software:', error);
-        logMessage('Failed to update software', LOG_TYPE.ERROR);
-    } finally {
-        // Re-enable the button and reset the text
-        updateButton.disabled = false;
-        updateButton.textContent = 'Update Software'; // Adjust to the original text
+        
+        // Re-enable the button and restore text
+        if (updateButton) {
+            updateButton.disabled = false;
+            const buttonSpan = updateButton.querySelector('span');
+            if (buttonSpan) {
+                buttonSpan.textContent = 'Update Software';
+            }
+        }
     }
 }
 
@@ -1701,88 +1878,108 @@ function switchTab(tabName) {
 }
 
 function connectStatusWebSocket() {
+    // If already connected, don't reconnect
     if (statusSocket && statusSocket.readyState === WebSocket.OPEN) {
         console.log('WebSocket already connected');
         return;
     }
-    
+
+    // If we've reached the maximum number of reconnect attempts, stop trying
     if (reconnectAttempts >= maxReconnectAttempts) {
-        console.log('Max reconnect attempts reached, giving up');
+        console.log(`Maximum reconnect attempts (${maxReconnectAttempts}) reached. Stopping reconnection.`);
         return;
     }
-    
-    reconnectAttempts++;
-    
-    // Create WebSocket connection
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
-    const wsEndpoint = 'ws/status';
-    
-    console.log('WebSocket protocol:', protocol);
-    console.log('WebSocket host:', host);
-    console.log('WebSocket endpoint:', wsEndpoint);
-    
-    // Build the WebSocket URL based on the base URL
-    let wsUrl;
-    
-    // If we're in Home Assistant, use the ingress path
-    if (baseUrl) {
-        // Remove leading slash if present
-        const cleanBaseUrl = baseUrl.startsWith('/') ? baseUrl.substring(1) : baseUrl;
-        // Remove trailing slash if present
-        const cleanPath = cleanBaseUrl.endsWith('/') ? cleanBaseUrl.slice(0, -1) : cleanBaseUrl;
-        
-        console.log('WebSocket clean path:', cleanPath);
-        wsUrl = `${protocol}//${host}/${cleanPath}/${wsEndpoint}`;
-    } else {
-        // Direct access - use the original endpoint
-        wsUrl = `${protocol}//${host}/${wsEndpoint}`;
-    }
-    
-    console.log('Connecting to WebSocket at:', wsUrl);
-    statusSocket = new WebSocket(wsUrl);
-    
-    statusSocket.onopen = function(e) {
-        console.log('Status WebSocket connected');
-        wsConnected = true;
-        reconnectAttempts = 0; // Reset reconnect attempts on successful connection
-    };
 
-    statusSocket.onmessage = (event) => {
-        try {
-            const message = JSON.parse(event.data);
-            if (message.type === 'status_update' && message.data) {
-                updateCurrentlyPlayingUI(message.data);
-                
-                // Disconnect WebSocket if no pattern is running
-                if (!message.data.is_running) {
-                    console.log('No pattern running, disconnecting WebSocket');
-                    disconnectStatusWebSocket();
-                }
+    try {
+        // Determine WebSocket protocol (wss for HTTPS, ws for HTTP)
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const host = window.location.host;
+        
+        // For debugging
+        console.log('WebSocket protocol:', protocol);
+        console.log('WebSocket host:', host);
+        console.log('Base URL:', baseUrl);
+        
+        // Clean the base URL for WebSocket connection
+        let cleanBaseUrl = baseUrl;
+        if (cleanBaseUrl.startsWith('/')) {
+            cleanBaseUrl = cleanBaseUrl.substring(1);
+        }
+        if (cleanBaseUrl.endsWith('/')) {
+            cleanBaseUrl = cleanBaseUrl.substring(0, cleanBaseUrl.length - 1);
+        }
+        
+        console.log('Cleaned base URL for WebSocket:', cleanBaseUrl);
+        
+        // Construct the WebSocket URL
+        let wsUrl;
+        if (baseUrl) {
+            // We're in Home Assistant, use the ingress path
+            wsUrl = `${protocol}//${host}/${cleanBaseUrl}/ws/status`;
+        } else {
+            // Direct access
+            wsUrl = `${protocol}//${host}/ws/status`;
+        }
+        
+        console.log('WebSocket URL:', wsUrl);
+        
+        statusSocket = new WebSocket(wsUrl);
+        
+        statusSocket.onopen = () => {
+            console.log('WebSocket connection established');
+            wsConnected = true;
+            reconnectAttempts = 0; // Reset reconnect attempts on successful connection
+            
+            // Clear any existing interval
+            if (statusUpdateInterval) {
+                clearInterval(statusUpdateInterval);
             }
-        } catch (error) {
-            console.error('Error processing status update:', error);
-            console.error('Raw data that caused error:', event.data);
-        }
-    };
-
-    statusSocket.onclose = () => {
-        console.log('Status WebSocket disconnected');
-        wsConnected = false;
-        clearInterval(statusUpdateInterval);
+            
+            // Set up interval to check connection status
+            statusUpdateInterval = setInterval(() => {
+                if (statusSocket.readyState !== WebSocket.OPEN) {
+                    console.log('WebSocket connection lost. Attempting to reconnect...');
+                    wsConnected = false;
+                    connectStatusWebSocket();
+                }
+            }, 5000); // Check every 5 seconds
+        };
         
-        // Only attempt to reconnect if we're supposed to be connected
-        if (reconnectAttempts < maxReconnectAttempts && document.body.classList.contains('playing')) {
+        statusSocket.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'status_update') {
+                    updateCurrentlyPlayingUI(data.data);
+                }
+            } catch (error) {
+                console.error('Error parsing WebSocket message:', error);
+            }
+        };
+        
+        statusSocket.onclose = () => {
+            console.log('WebSocket connection closed');
+            wsConnected = false;
+            
+            // Clear the interval when the connection is closed
+            if (statusUpdateInterval) {
+                clearInterval(statusUpdateInterval);
+                statusUpdateInterval = null;
+            }
+            
+            // Attempt to reconnect after a delay
             reconnectAttempts++;
-            const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-            console.log(`Reconnecting in ${delay/1000}s (Attempt ${reconnectAttempts}/${maxReconnectAttempts})`);
-            setTimeout(connectStatusWebSocket, delay);
-        }
-    };
-
-    statusSocket.onerror = (error) => {
-        console.error('WebSocket error:', error);
-    };
+            setTimeout(() => {
+                connectStatusWebSocket();
+            }, 3000); // Wait 3 seconds before reconnecting
+        };
+        
+        statusSocket.onerror = (error) => {
+            console.error('WebSocket error:', error);
+            wsConnected = false;
+        };
+    } catch (error) {
+        console.error('Error setting up WebSocket:', error);
+    }
 }
 
 function disconnectStatusWebSocket() {
@@ -2016,13 +2213,20 @@ async function loadWledIp() {
         // Attempt to load from the backend if not found in localStorage
         try {
             const response = await fetch(apiUrl('/get_wled_ip'));
-            const data = await response.json();
-            if (data.wled_ip) {
-                savedIp = data.wled_ip;
-                localStorage.setItem('wled_ip', savedIp);
+            // Check if the response is OK before trying to parse JSON
+            if (response.ok) {
+                const data = await response.json();
+                if (data.wled_ip) {
+                    savedIp = data.wled_ip;
+                    localStorage.setItem('wled_ip', savedIp);
+                }
+            } else {
+                console.log(`WLED IP not set on backend (status: ${response.status})`);
+                // This is expected if no WLED IP is set, so we don't need to log an error
             }
         } catch (error) {
-            logMessage(`Error fetching WLED IP from backend: ${error.message}`, LOG_TYPE.ERROR);
+            console.log(`Error fetching WLED IP from backend: ${error.message}`);
+            // Don't show error message to user as this is expected behavior
         }
     }
 
